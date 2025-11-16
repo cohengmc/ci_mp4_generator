@@ -62,15 +62,6 @@ After generating content, the script automatically creates MP4 videos:
 
 **Note:** FFmpeg must be installed for video generation. Install with `brew install ffmpeg` on macOS.
 
-## Configuration
-
-### Environment Variables
-
-- `GEMINI_API_KEY` (required) - Your Google Gemini API key
-- `GENERATE_IMAGES` (optional) - Set to `"true"` to use Imagen API, `"false"` for Picsum placeholder images (default: `false`)
-- `VITE_STUDYING_LANGUAGE` (optional) - Target language: `English`, `Spanish`, `Portuguese`, `French`, or `Mandarin Chinese` (default: `Portuguese`)
-- `STUDYING_LANGUAGE` (optional) - Fallback if `VITE_STUDYING_LANGUAGE` is not set
-
 ## Example
 
 ```bash

@@ -1,0 +1,30 @@
+{
+  "name": "terminal-content-generator",
+  "version": "1.0.0",
+  "description": "Terminal script to generate language learning content using Gemini AI",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "generate": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "language-learning",
+    "gemini",
+    "content-generation"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/genai": "^1.27.0",
+    "dotenv": "^16.4.5",
+    "wavefile": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "tsx": "^4.19.2",
+    "typescript": "~5.8.2"
+  }
+}
+

@@ -87,7 +87,7 @@ export async function generateImage(prompt: string): Promise<string> {
   return `https://picsum.photos/seed/${seed}/1280/720`;
 }
 
-export async function generateAudio(text: string, speakingRate?: number): Promise<string> {
+export async function generateAudio(text: string): Promise<string> {
   const studyingLang = getStudyingLanguage();
   try {
     const response: GenerateContentResponse = await ai.models.generateContent({
@@ -99,7 +99,6 @@ export async function generateAudio(text: string, speakingRate?: number): Promis
                 voiceConfig: {
                   prebuiltVoiceConfig: { voiceName: studyingLang.ttsVoiceName },
                 },
-                ...(speakingRate != null ? { speakingRate } : {}),
             },
         },
     });
@@ -116,7 +115,7 @@ export async function generateAudio(text: string, speakingRate?: number): Promis
 }
 
 // Batched TTS: synthesize multiple sentences in one call
-export async function generateAudioBatch(sentences: string[], speakingRate?: number, languageKey?: LanguageKey): Promise<string> {
+export async function generateAudioBatch(sentences: string[], languageKey?: LanguageKey): Promise<string> {
   const lang = languageKey ? LANGUAGE_MAP[languageKey] : getStudyingLanguage();
   const text = sentences.map(s => s.trim().replace(/\s+/g, ' ')).join('. ') + '.';
   const response: GenerateContentResponse = await ai.models.generateContent({
@@ -128,7 +127,6 @@ export async function generateAudioBatch(sentences: string[], speakingRate?: num
         voiceConfig: {
           prebuiltVoiceConfig: { voiceName: lang.ttsVoiceName },
         },
-        ...(speakingRate != null ? { speakingRate } : {}),
       },
     },
   });

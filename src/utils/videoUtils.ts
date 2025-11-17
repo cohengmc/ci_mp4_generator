@@ -83,6 +83,22 @@ async function findMaxSegmentNumber(contentDir: string, audioSuffix: string = ''
 }
 
 /**
+ * Create a silent audio file for pause duration
+ */
+async function createSilentAudio(outputPath: string, durationSeconds: number, sampleRate: number = 24000): Promise<boolean> {
+  // Create silent audio using FFmpeg
+  const cmd = [
+    'ffmpeg',
+    '-f', 'lavfi',
+    '-i', `anullsrc=channel_layout=mono:sample_rate=${sampleRate}`,
+    '-t', durationSeconds.toString(),
+    '-y',
+    outputPath
+  ];
+  return await runFFmpegCommand(cmd, `creating silent audio for ${durationSeconds}s pause`);
+}
+
+/**
  * Process video creation for a specific language variant
  */
 async function processLanguage(
@@ -91,7 +107,8 @@ async function processLanguage(
   outputDir: string,
   timestamp: string,
   audioSuffix: string = '',
-  languageLabel: string
+  languageLabel: string,
+  pauseGapDuration: number = 0
 ): Promise<boolean> {
   const maxSegment = await findMaxSegmentNumber(contentDir, audioSuffix);
   if (maxSegment === 0) {
@@ -165,13 +182,61 @@ async function processLanguage(
   console.log();
   console.log(`Step 2: Creating concatenation list for ${languageLabel}...`);
 
-  // Step 2: Create concatenation list file
+  // Step 2: Create concatenation list with pause segments if needed
   const concatList = join(segmentsDir, `concat_list${audioSuffix}.txt`);
-  // Use absolute paths for concat file (like Python script)
-  const concatLines = segmentsCreated.map(file => `file '${resolve(file)}'`).join('\n');
-  await fs.writeFile(concatList, concatLines, 'utf-8');
+  const concatLines: string[] = [];
+  
+  // If pause duration is set, create pause segments between regular segments
+  if (pauseGapDuration > 0) {
+    console.log(`  Creating pause segments (${pauseGapDuration}s between segments)...`);
+    const pauseSegmentsCreated: string[] = [];
+    
+    for (let i = 0; i < segmentsCreated.length; i++) {
+      // Add the regular segment
+      concatLines.push(`file '${resolve(segmentsCreated[i])}'`);
+      
+      // Create pause segment after each segment (except the last one)
+      if (i < segmentsCreated.length - 1) {
+        const segmentNum = i + 1;
+        const imageFile = join(contentDir, `image_${segmentNum}.png`);
+        const pauseAudioFile = join(segmentsDir, `pause_${segmentNum}${audioSuffix}.wav`);
+        const pauseSegmentFile = join(segmentsDir, `pause_segment${audioSuffix}_${segmentNum}.mp4`);
+        
+        // Create silent audio for pause
+        if (await createSilentAudio(pauseAudioFile, pauseGapDuration)) {
+          // Create pause video segment (image + silent audio)
+          const pauseCmd = [
+            'ffmpeg',
+            '-loop', '1',
+            '-i', imageFile,
+            '-i', pauseAudioFile,
+            '-c:v', 'libx264',
+            '-tune', 'stillimage',
+            '-pix_fmt', 'yuv420p',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-shortest',
+            '-y',
+            pauseSegmentFile
+          ];
+          
+          if (await runFFmpegCommand(pauseCmd, `creating pause segment ${segmentNum}`)) {
+            concatLines.push(`file '${resolve(pauseSegmentFile)}'`);
+            pauseSegmentsCreated.push(pauseSegmentFile);
+          }
+        }
+      }
+    }
+    
+    console.log(`  ✅ Created ${pauseSegmentsCreated.length} pause segments`);
+  } else {
+    // No pause, just add all segments
+    concatLines.push(...segmentsCreated.map(file => `file '${resolve(file)}'`));
+  }
+  
+  await fs.writeFile(concatList, concatLines.join('\n'), 'utf-8');
 
-  console.log(`  ✅ Concatenation list created with ${segmentsCreated.length} segments`);
+  console.log(`  ✅ Concatenation list created with ${concatLines.length} segments`);
   console.log();
 
   // Step 3: Concatenate all segments
@@ -215,6 +280,16 @@ async function processLanguage(
  * Create MP4 videos from the generated content
  */
 export async function createVideos(contentDir: string, languageLabel: string, generateSpanish: boolean): Promise<void> {
+  // Get pause gap duration from environment (default to 0 if not set)
+  let pauseGapDuration = process.env.PAUSE_GAP_DURATION ? parseFloat(process.env.PAUSE_GAP_DURATION) : 0;
+  if (isNaN(pauseGapDuration) || pauseGapDuration < 0) {
+    console.warn(`⚠️  Warning: Invalid PAUSE_GAP_DURATION value, using default 0`);
+    pauseGapDuration = 0;
+  }
+  
+  if (pauseGapDuration > 0) {
+    console.log(`⏸️  Pause gap duration: ${pauseGapDuration}s between segments`);
+  }
   // Check if FFmpeg is installed
   if (!(await checkFFmpeg())) {
     console.error('❌ Error: FFmpeg not found. Please install FFmpeg first.');
@@ -253,7 +328,7 @@ export async function createVideos(contentDir: string, languageLabel: string, ge
   // Process target language (no suffix)
   const hasTargetLanguage = await findMaxSegmentNumber(contentDir, '');
   if (hasTargetLanguage > 0) {
-    await processLanguage(contentDir, segmentsDir, targetLanguageDir, timestamp, '', languageLabel);
+    await processLanguage(contentDir, segmentsDir, targetLanguageDir, timestamp, '', languageLabel, pauseGapDuration);
     console.log();
   }
 
@@ -261,7 +336,7 @@ export async function createVideos(contentDir: string, languageLabel: string, ge
   if (generateSpanish) {
     const hasSpanish = await findMaxSegmentNumber(contentDir, '_es');
     if (hasSpanish > 0) {
-      await processLanguage(contentDir, segmentsDir, spanishDir, timestamp, '_es', 'Spanish');
+      await processLanguage(contentDir, segmentsDir, spanishDir, timestamp, '_es', 'Spanish', pauseGapDuration);
       console.log();
     }
   }

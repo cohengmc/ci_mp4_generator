@@ -49,8 +49,8 @@ export async function saveAudio(pcmBase64: string, filepath: string, sampleRate:
 export async function saveTranscript(segments: StorySegment[], filepath: string, useSpanish: boolean = false): Promise<void> {
   try {
     const lines = segments.map((segment, index) => {
-      const sentence = useSpanish ? segment.spanishSentence : segment.targetSentence;
-      return `${index + 1}. ${sentence || ''}`;
+      const sentence = useSpanish ? (segment.spanishSentence ?? '') : segment.targetSentence;
+      return `${index + 1}. ${sentence}`;
     }).join('\n\n');
     
     await fs.writeFile(filepath, lines, 'utf-8');

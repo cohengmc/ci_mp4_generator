@@ -1,4 +1,9 @@
 import wavefile from 'wavefile';
+import { spawn } from 'child_process';
+import { promises as fs } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+
 const WaveFile = wavefile.WaveFile;
 
 const SAMPLE_RATE = 24000;
@@ -155,5 +160,118 @@ export function pcmBase64ToWavBuffer(pcmBase64: string, sampleRate: number = SAM
   const wav = new WaveFile();
   wav.fromScratch(NUM_CHANNELS, sampleRate, '16', pcmInt16);
   return Buffer.from(wav.toBuffer());
+}
+
+/**
+ * Extract PCM data from WAV file buffer
+ */
+function extractPCMFromWav(wavBuffer: Buffer): Uint8Array {
+  // WAV file format: RIFF header (12 bytes) + fmt chunk (24 bytes) + data chunk header (8 bytes) + PCM data
+  // Find 'data' chunk
+  let dataOffset = 0;
+  for (let i = 0; i < wavBuffer.length - 4; i++) {
+    if (wavBuffer[i] === 0x64 && wavBuffer[i + 1] === 0x61 && 
+        wavBuffer[i + 2] === 0x74 && wavBuffer[i + 3] === 0x61) {
+      dataOffset = i + 8; // Skip 'data' marker and size field
+      break;
+    }
+  }
+  
+  if (dataOffset === 0) {
+    throw new Error('Could not find PCM data in WAV file');
+  }
+  
+  // Read data size from the 4 bytes before dataOffset
+  const dataSize = wavBuffer.readUInt32LE(dataOffset - 4);
+  return new Uint8Array(wavBuffer.slice(dataOffset, dataOffset + dataSize));
+}
+
+/**
+ * Adjust audio speed using FFmpeg
+ * @param audioBase64 - Base64 encoded PCM audio
+ * @param speed - Speed multiplier (0.5 to 2.0, e.g., 0.8 = 80% speed)
+ * @param sampleRate - Sample rate of the audio
+ * @returns Base64 encoded PCM audio at the new speed
+ */
+export async function adjustAudioSpeed(audioBase64: string, speed: number, sampleRate: number = 24000): Promise<string> {
+  if (speed === 1.0) {
+    return audioBase64; // No change needed
+  }
+
+  if (speed < 0.5 || speed > 2.0) {
+    throw new Error(`Audio speed must be between 0.5 and 2.0, got ${speed}`);
+  }
+
+  // Create temporary files
+  const tempDir = tmpdir();
+  const inputFile = join(tempDir, `audio_input_${Date.now()}_${Math.random().toString(36).substring(7)}.wav`);
+  const outputFile = join(tempDir, `audio_output_${Date.now()}_${Math.random().toString(36).substring(7)}.wav`);
+
+  try {
+    // Convert base64 to WAV file
+    const wavBuffer = pcmBase64ToWavBuffer(audioBase64, sampleRate);
+    await fs.writeFile(inputFile, wavBuffer);
+
+    // Use FFmpeg to adjust speed with atempo filter (maintains pitch)
+    return new Promise((resolve, reject) => {
+      const ffmpeg = spawn('ffmpeg', [
+        '-i', inputFile,
+        '-filter:a', `atempo=${speed}`,
+        '-ar', sampleRate.toString(),
+        '-y',
+        outputFile
+      ]);
+
+      let stderr = '';
+      ffmpeg.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      ffmpeg.on('error', async (error) => {
+        // Clean up on error
+        try {
+          await fs.unlink(inputFile).catch(() => {});
+          await fs.unlink(outputFile).catch(() => {});
+        } catch {}
+        reject(new Error(`FFmpeg error: ${error.message}`));
+      });
+
+      ffmpeg.on('close', async (code) => {
+        if (code !== 0) {
+          // Clean up on error
+          try {
+            await fs.unlink(inputFile).catch(() => {});
+            await fs.unlink(outputFile).catch(() => {});
+          } catch {}
+          reject(new Error(`FFmpeg failed: ${stderr}`));
+          return;
+        }
+
+        try {
+          // Read the output file and convert back to base64 PCM
+          const outputBuffer = await fs.readFile(outputFile);
+          // Parse WAV file to extract PCM data
+          const pcmData = extractPCMFromWav(outputBuffer);
+          const base64PCM = Buffer.from(pcmData).toString('base64');
+          resolve(base64PCM);
+        } catch (error) {
+          reject(error);
+        } finally {
+          // Clean up temp files
+          try {
+            await fs.unlink(inputFile).catch(() => {});
+            await fs.unlink(outputFile).catch(() => {});
+          } catch {}
+        }
+      });
+    });
+  } catch (error) {
+    // Clean up on error
+    try {
+      await fs.unlink(inputFile).catch(() => {});
+      await fs.unlink(outputFile).catch(() => {});
+    } catch {}
+    throw error;
+  }
 }
 

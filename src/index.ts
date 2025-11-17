@@ -6,7 +6,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import { generateStorySegments, generateImage, generateAudioBatch, translateToSpanish } from './services/geminiService.js';
-import { decode, decodeAudioData, splitAudioBySilence, sliceAudioBuffer, encodeAudioBufferToPCMBase64 } from './utils/audioUtils.js';
+import { decode, decodeAudioData, splitAudioBySilence, sliceAudioBuffer, encodeAudioBufferToPCMBase64, adjustAudioSpeed } from './utils/audioUtils.js';
 import { saveImage, saveAudio, saveTranscript, ensureDirectory } from './utils/fileUtils.js';
 import { createVideos } from './utils/videoUtils.js';
 import { getStudyingLanguage } from './config/language.js';
@@ -96,7 +96,7 @@ function normalizeRangesToCount(
 /**
  * Main content generation function
  */
-async function generateContent(prompt: string, sentenceCount: number, generateSpanish: boolean): Promise<StorySegment[]> {
+async function generateContent(prompt: string, sentenceCount: number, generateSpanish: boolean, audioSpeed: number): Promise<StorySegment[]> {
   console.log(`\n📝 Generating ${sentenceCount} story segments...`);
   const segmentsData = await generateStorySegments(prompt, undefined, sentenceCount);
   console.log(`✅ Generated ${segmentsData.length} story segments`);
@@ -105,7 +105,13 @@ async function generateContent(prompt: string, sentenceCount: number, generateSp
   const sentences = segmentsData.map(s => s.target_sentence);
   
   console.log(`\n🎤 Generating audio for target language (${getStudyingLanguage().displayName})...`);
-  const batchedAudioBase64 = await generateAudioBatch(sentences);
+  let batchedAudioBase64 = await generateAudioBatch(sentences);
+  
+  // Adjust audio speed if needed
+  if (audioSpeed !== 1.0) {
+    console.log(`  Adjusting audio speed to ${audioSpeed}x...`);
+    batchedAudioBase64 = await adjustAudioSpeed(batchedAudioBase64, audioSpeed, SAMPLE_RATE);
+  }
   console.log(`✅ Generated batch audio for target language`);
 
   // Conditionally generate Spanish content
@@ -120,7 +126,13 @@ async function generateContent(prompt: string, sentenceCount: number, generateSp
     console.log(`✅ Translated ${spanishSentences.length} sentences to Spanish`);
 
     console.log(`\n🎤 Generating Spanish audio...`);
-    spanishBatchedAudioBase64 = await generateAudioBatch(spanishSentences, undefined, 'Spanish');
+    spanishBatchedAudioBase64 = await generateAudioBatch(spanishSentences, 'Spanish');
+    
+    // Adjust Spanish audio speed if needed
+    if (audioSpeed !== 1.0) {
+      console.log(`  Adjusting Spanish audio speed to ${audioSpeed}x...`);
+      spanishBatchedAudioBase64 = await adjustAudioSpeed(spanishBatchedAudioBase64, audioSpeed, SAMPLE_RATE);
+    }
     console.log(`✅ Generated batch audio for Spanish`);
   }
 
@@ -217,10 +229,11 @@ async function saveFiles(segments: StorySegment[], outputDir: string, generateSp
   // Save Spanish audio (only if enabled)
   if (generateSpanish) {
     for (let i = 0; i < segments.length; i++) {
-      if (segments[i].spanishAudioBase64) {
+      const spanishAudio = segments[i].spanishAudioBase64;
+      if (spanishAudio) {
         const audioPath = join(outputDir, `audio_${i + 1}_es.wav`);
         console.log(`  Saving audio_${i + 1}_es.wav...`);
-        await saveAudio(segments[i].spanishAudioBase64, audioPath, SAMPLE_RATE);
+        await saveAudio(spanishAudio, audioPath, SAMPLE_RATE);
       }
     }
   }
@@ -257,9 +270,27 @@ async function main() {
 
     const language = getStudyingLanguage();
     const generateSpanish = process.env.GENERATE_SPANISH === 'true';
+    
+    // Get audio speed from environment (default to 1.0 if not set)
+    let audioSpeed = process.env.AUDIO_SPEED ? parseFloat(process.env.AUDIO_SPEED) : 1.0;
+    if (isNaN(audioSpeed) || audioSpeed <= 0 || audioSpeed > 1) {
+      console.warn(`⚠️  Warning: Invalid AUDIO_SPEED value, using default 1.0`);
+      audioSpeed = 1.0;
+    }
+    
+    // Get pause gap duration from environment (default to 0 if not set)
+    let pauseGapDuration = process.env.PAUSE_GAP_DURATION ? parseFloat(process.env.PAUSE_GAP_DURATION) : 0;
+    if (isNaN(pauseGapDuration) || pauseGapDuration < 0) {
+      console.warn(`⚠️  Warning: Invalid PAUSE_GAP_DURATION value, using default 0`);
+      pauseGapDuration = 0;
+    }
+    
     console.log(`📚 Target Language: ${language.displayName}`);
     console.log(`🖼️  Image Generation: ${process.env.GENERATE_IMAGES === 'true' ? 'Enabled (Imagen API)' : 'Disabled (Picsum Photos)'}`);
-    console.log(`🌐 Spanish Generation: ${generateSpanish ? 'Enabled' : 'Disabled'}\n`);
+    console.log(`🌐 Spanish Generation: ${generateSpanish ? 'Enabled' : 'Disabled'}`);
+    console.log(`🎵 Audio Speed: ${audioSpeed}`);
+    console.log(`⏸️  Pause Gap Duration: ${pauseGapDuration}s`);
+    console.log();
 
     // Prompt for story
     const prompt = await promptUser('Enter your story prompt: ');
@@ -278,7 +309,7 @@ async function main() {
     }
 
     // Generate content
-    const segments = await generateContent(prompt, sentenceCount, generateSpanish);
+    const segments = await generateContent(prompt, sentenceCount, generateSpanish, audioSpeed);
 
     // Create output directory with timestamp (YYYYMMDD_HHMMSS format)
     const now = new Date();

@@ -2,6 +2,16 @@ import { GoogleGenAI, Type, Modality } from "@google/genai";
 import type { GenerateContentResponse } from "@google/genai";
 import { getStudyingLanguage, LANGUAGE_MAP, type LanguageKey } from '../config/language.js';
 import dotenv from 'dotenv';
+import {
+  getStoryGenerationPrompt,
+  getStoryContinuationPrompt,
+  getStoryGenerationSystemInstruction,
+  getImageGenerationPrompt,
+  getTranslationPrompt,
+  TRANSLATION_SYSTEM_INSTRUCTION,
+  getTargetSentenceDescription,
+  IMAGE_PROMPT_DESCRIPTION
+} from '../prompts/geminiPrompts.js';
 
 dotenv.config();
 
@@ -14,7 +24,6 @@ if (!API_KEY) {
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 function getStorySchema() {
-  const lang = getStudyingLanguage();
   return {
     type: Type.ARRAY,
     items: {
@@ -22,11 +31,11 @@ function getStorySchema() {
       properties: {
         target_sentence: {
           type: Type.STRING,
-          description: `A very simple sentence in ${lang.displayName}.`,
+          description: getTargetSentenceDescription(),
         },
         image_prompt: {
           type: Type.STRING,
-          description: "A simple prompt in English for an image generation model that illustrates the sentence.",
+          description: IMAGE_PROMPT_DESCRIPTION,
         },
       },
       required: ["target_sentence", "image_prompt"],
@@ -35,10 +44,9 @@ function getStorySchema() {
 }
 
 export async function generateStorySegments(prompt: string, context?: string, count: number = 5): Promise<{ target_sentence: string; image_prompt: string }[]> {
-  const studyingLang = getStudyingLanguage();
   const fullPrompt = context
-    ? `Continue this simple story for a beginner ${studyingLang.displayName} learner: "${context}". Generate the next ${count} sentences.`
-    : `Based on the prompt "${prompt}", create a very simple story in ${studyingLang.displayName} for an absolute beginner. The vocabulary and grammar must be extremely basic and repetitive. Generate the first ${count} sentences.`;
+    ? getStoryContinuationPrompt(context, count)
+    : getStoryGenerationPrompt(prompt, count);
 
   try {
     const response: GenerateContentResponse = await ai.models.generateContent({
@@ -47,7 +55,7 @@ export async function generateStorySegments(prompt: string, context?: string, co
       config: {
         responseMimeType: 'application/json',
         responseSchema: getStorySchema(),
-        systemInstruction: `You are a language learning assistant. Your task is to create a simple, continuous story in ${studyingLang.displayName} for an absolute beginner. Break the story into a sequence of short, simple sentences. For each sentence, provide a concise English description for an image that illustrates it. Only output the JSON.`
+        systemInstruction: getStoryGenerationSystemInstruction()
       },
     });
     const jsonStr = response.text.trim();
@@ -58,23 +66,82 @@ export async function generateStorySegments(prompt: string, context?: string, co
   }
 }
 
-export async function generateImage(prompt: string): Promise<string> {
+export async function generateImage(prompt: string, previousImageBase64?: string): Promise<string> {
   const generateImages = process.env.GENERATE_IMAGES === "true";
 
   if (generateImages) {
     try {
-      const response = await ai.models.generateImages({
-        model: 'imagen-4.0-generate-001',
-        prompt: `A vibrant, clear, and simple illustration for a language learning app. Style: friendly, cartoonish, colorful. Content: ${prompt}`,
-        config: {
-          numberOfImages: 1,
-          outputMimeType: 'image/png',
-          aspectRatio: '16:9',
-        },
-      });
+      // Extract base64 data if it's a data URL
+      let previousImageData: string | undefined;
+      if (previousImageBase64) {
+        if (previousImageBase64.startsWith('data:image')) {
+          previousImageData = previousImageBase64.split(',')[1];
+        } else {
+          previousImageData = previousImageBase64;
+        }
+      }
 
-      const base64ImageBytes: string = response.generatedImages[0].image.imageBytes;
-      return `data:image/png;base64,${base64ImageBytes}`;
+      // If we have a previous image, use Gemini native image generation for editing
+      if (previousImageData) {
+        const contents: any[] = [
+          { text: getImageGenerationPrompt(prompt, true) }
+        ];
+        
+        // Add the previous image to the contents array
+        contents.push({
+          inlineData: {
+            mimeType: 'image/png',
+            data: previousImageData,
+          },
+        });
+
+        const response: GenerateContentResponse = await ai.models.generateContent({
+          model: 'gemini-2.5-flash-image',
+          contents: contents,
+          config: {
+            imageConfig: {
+              aspectRatio: '16:9',
+            },
+          },
+        });
+
+        // Extract image from response - try candidates pattern first (like audio generation)
+        const candidate = response.candidates?.[0];
+        if (candidate?.content?.parts) {
+          for (const part of candidate.content.parts) {
+            if (part.inlineData) {
+              const imageData = part.inlineData.data;
+              return `data:image/png;base64,${imageData}`;
+            }
+          }
+        }
+        
+        // Fallback to direct parts access (if response structure is different)
+        if (response.parts) {
+          for (const part of response.parts) {
+            if (part.inlineData) {
+              const imageData = part.inlineData.data;
+              return `data:image/png;base64,${imageData}`;
+            }
+          }
+        }
+        
+        throw new Error("No image data returned from API.");
+      } else {
+        // For the first image, use Imagen
+        const response = await ai.models.generateImages({
+          model: 'imagen-4.0-generate-001',
+          prompt: getImageGenerationPrompt(prompt, false),
+          config: {
+            numberOfImages: 1,
+            outputMimeType: 'image/png',
+            aspectRatio: '16:9',
+          },
+        });
+
+        const base64ImageBytes: string = response.generatedImages[0].image.imageBytes;
+        return `data:image/png;base64,${base64ImageBytes}`;
+      }
     } catch (error) {
       console.error("Error generating image:", error);
       throw new Error("Failed to generate image using Gemini API.");
@@ -142,12 +209,11 @@ export async function generateAudioBatch(sentences: string[], languageKey?: Lang
  */
 export async function translateToSpanish(sentences: string[]): Promise<string[]> {
   try {
-    const text = sentences.join('\n');
     const response: GenerateContentResponse = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: `Translate the following sentences to Spanish. Maintain the same simple, beginner-friendly style. Return only the translations, one per line, in the same order:\n\n${text}`,
+      contents: getTranslationPrompt(sentences),
       config: {
-        systemInstruction: 'You are a translation assistant. Translate each sentence to Spanish while maintaining the same simple, beginner-friendly style. Return only the translations, one per line, in the exact same order as the input.',
+        systemInstruction: TRANSLATION_SYSTEM_INSTRUCTION,
       },
     });
     const translations = response.text.trim().split('\n').map(s => s.trim()).filter(s => s.length > 0);

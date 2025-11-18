@@ -83,6 +83,94 @@ async function findMaxSegmentNumber(contentDir: string, audioSuffix: string = ''
 }
 
 /**
+ * Get image dimensions using ffprobe
+ */
+async function getImageDimensions(imagePath: string): Promise<{ width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    const ffprobe = spawn('ffprobe', [
+      '-v', 'error',
+      '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height',
+      '-of', 'json',
+      imagePath
+    ]);
+
+    let stdout = '';
+    let stderr = '';
+
+    ffprobe.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    ffprobe.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    ffprobe.on('error', () => {
+      resolve(null);
+    });
+
+    ffprobe.on('close', (code) => {
+      if (code !== 0) {
+        resolve(null);
+        return;
+      }
+
+      try {
+        const result = JSON.parse(stdout);
+        const streams = result.streams;
+        if (streams && streams.length > 0) {
+          const stream = streams[0];
+          if (stream.width && stream.height) {
+            resolve({
+              width: parseInt(stream.width, 10),
+              height: parseInt(stream.height, 10)
+            });
+            return;
+          }
+        }
+      } catch {
+        // JSON parse error
+      }
+      resolve(null);
+    });
+  });
+}
+
+/**
+ * Find maximum image dimensions across all images
+ */
+async function findMaxImageDimensions(contentDir: string, maxSegment: number): Promise<{ width: number; height: number }> {
+  let maxWidth = 0;
+  let maxHeight = 0;
+
+  console.log(`  Detecting image dimensions...`);
+  
+  for (let i = 1; i <= maxSegment; i++) {
+    const imageFile = join(contentDir, `image_${i}.png`);
+    try {
+      await fs.access(imageFile);
+      const dimensions = await getImageDimensions(imageFile);
+      if (dimensions) {
+        if (dimensions.width > maxWidth) maxWidth = dimensions.width;
+        if (dimensions.height > maxHeight) maxHeight = dimensions.height;
+      }
+    } catch {
+      // Image doesn't exist, skip
+    }
+  }
+
+  if (maxWidth === 0 || maxHeight === 0) {
+    // Default to 16:9 aspect ratio if detection fails
+    maxWidth = 1344;
+    maxHeight = 768;
+  }
+
+  console.log(`  ✅ Maximum dimensions: ${maxWidth}x${maxHeight}`);
+  return { width: maxWidth, height: maxHeight };
+}
+
+/**
  * Create a silent audio file for pause duration
  */
 async function createSilentAudio(outputPath: string, durationSeconds: number, sampleRate: number = 24000): Promise<boolean> {
@@ -118,6 +206,10 @@ async function processLanguage(
   console.log(`📊 Found ${maxSegment} segment(s) for ${languageLabel}`);
   console.log();
 
+  // Step 0: Detect maximum image dimensions
+  const maxDimensions = await findMaxImageDimensions(contentDir, maxSegment);
+  console.log();
+
   // Step 1: Generate individual video segments
   console.log(`Step 1: Creating individual video segments for ${languageLabel}...`);
   const segmentsCreated: string[] = [];
@@ -149,12 +241,13 @@ async function processLanguage(
 
     console.log(`  Creating segment ${i}/${maxSegment}...`);
 
-    // FFmpeg command to create segment
+    // FFmpeg command to create segment with scaling to max dimensions
     const cmd = [
       'ffmpeg',
       '-loop', '1',
       '-i', imageFile,
       '-i', audioFile,
+      '-vf', `scale=${maxDimensions.width}:${maxDimensions.height}:force_original_aspect_ratio=decrease,pad=${maxDimensions.width}:${maxDimensions.height}:(ow-iw)/2:(oh-ih)/2`,
       '-c:v', 'libx264',
       '-tune', 'stillimage',
       '-pix_fmt', 'yuv420p',
@@ -204,12 +297,13 @@ async function processLanguage(
         
         // Create silent audio for pause
         if (await createSilentAudio(pauseAudioFile, pauseGapDuration)) {
-          // Create pause video segment (image + silent audio)
+          // Create pause video segment (image + silent audio) with scaling
           const pauseCmd = [
             'ffmpeg',
             '-loop', '1',
             '-i', imageFile,
             '-i', pauseAudioFile,
+            '-vf', `scale=${maxDimensions.width}:${maxDimensions.height}:force_original_aspect_ratio=decrease,pad=${maxDimensions.width}:${maxDimensions.height}:(ow-iw)/2:(oh-ih)/2`,
             '-c:v', 'libx264',
             '-tune', 'stillimage',
             '-pix_fmt', 'yuv420p',
@@ -239,7 +333,7 @@ async function processLanguage(
   console.log(`  ✅ Concatenation list created with ${concatLines.length} segments`);
   console.log();
 
-  // Step 3: Concatenate all segments
+  // Step 3: Concatenate all segments with re-encoding to normalize and fix timestamps
   console.log(`Step 3: Concatenating all segments into final video for ${languageLabel}...`);
   await fs.mkdir(outputDir, { recursive: true });
   const finalOutput = join(outputDir, `${timestamp}.mp4`);
@@ -249,7 +343,11 @@ async function processLanguage(
     '-f', 'concat',
     '-safe', '0',
     '-i', concatList,
-    '-c', 'copy',
+    '-c:v', 'libx264',
+    '-tune', 'stillimage',
+    '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac',
+    '-b:a', '192k',
     '-y',
     finalOutput
   ];

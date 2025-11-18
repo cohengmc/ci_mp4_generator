@@ -186,7 +186,11 @@ async function generateContent(prompt: string, sentenceCount: number, generateSp
   for (let i = 0; i < segmentsData.length; i++) {
     const segment = segmentsData[i];
     console.log(`  Generating image ${i + 1}/${segmentsData.length}...`);
-    const imageUrl = await generateImage(segment.image_prompt);
+    
+    // Pass the previous image for consistency (if not the first image)
+    const previousImage = i > 0 ? newSegments[i - 1].imageUrl : undefined;
+    const imageUrl = await generateImage(segment.image_prompt, previousImage);
+    
     newSegments.push({
       id: randomUUID(),
       targetSentence: segment.target_sentence,
@@ -273,8 +277,8 @@ async function main() {
     
     // Get audio speed from environment (default to 1.0 if not set)
     let audioSpeed = process.env.AUDIO_SPEED ? parseFloat(process.env.AUDIO_SPEED) : 1.0;
-    if (isNaN(audioSpeed) || audioSpeed <= 0 || audioSpeed > 1) {
-      console.warn(`⚠️  Warning: Invalid AUDIO_SPEED value, using default 1.0`);
+    if (isNaN(audioSpeed) || audioSpeed < 0.5 || audioSpeed > 2.0) {
+      console.warn(`⚠️  Warning: Invalid AUDIO_SPEED value (must be between 0.5 and 2.0), using default 1.0`);
       audioSpeed = 1.0;
     }
     
@@ -293,7 +297,7 @@ async function main() {
     console.log();
 
     // Prompt for story
-    const prompt = await promptUser('Enter your story prompt: ');
+    const prompt = await promptUser('Enter your story prompt - Tell me a story...: ');
     if (!prompt) {
       console.error('❌ Error: Prompt cannot be empty');
       process.exit(1);

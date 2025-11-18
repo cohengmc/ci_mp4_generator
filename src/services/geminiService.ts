@@ -4,7 +4,6 @@ import { getStudyingLanguage, LANGUAGE_MAP, type LanguageKey } from '../config/l
 import dotenv from 'dotenv';
 import {
   getStoryGenerationPrompt,
-  getStoryContinuationPrompt,
   getStoryGenerationSystemInstruction,
   getImageGenerationPrompt,
   getTranslationPrompt,
@@ -44,9 +43,7 @@ function getStorySchema() {
 }
 
 export async function generateStorySegments(prompt: string, context?: string, count: number = 5): Promise<{ target_sentence: string; image_prompt: string }[]> {
-  const fullPrompt = context
-    ? getStoryContinuationPrompt(context, count)
-    : getStoryGenerationPrompt(prompt, count);
+  const fullPrompt = getStoryGenerationPrompt(prompt, count);
 
   try {
     const response: GenerateContentResponse = await ai.models.generateContent({

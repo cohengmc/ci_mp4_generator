@@ -97,9 +97,9 @@ function normalizeRangesToCount(
  * Main content generation function
  */
 async function generateContent(prompt: string, sentenceCount: number, generateSpanish: boolean, audioSpeed: number): Promise<StorySegment[]> {
-  console.log(`\n📝 Generating ${sentenceCount} story segments...`);
+  console.log(`\n📝 Generating ${sentenceCount} TPR commands/questions...`);
   const segmentsData = await generateStorySegments(prompt, undefined, sentenceCount);
-  console.log(`✅ Generated ${segmentsData.length} story segments`);
+  console.log(`✅ Generated ${segmentsData.length} commands/questions`);
 
   // Extract sentences
   const sentences = segmentsData.map(s => s.target_sentence);
@@ -296,19 +296,19 @@ async function main() {
     console.log(`⏸️  Pause Gap Duration: ${pauseGapDuration}s`);
     console.log();
 
-    // Prompt for story
-    const prompt = await promptUser('Enter your story prompt - Tell me a story...: ');
+    // Prompt for vocabulary/context
+    const prompt = await promptUser('Enter vocabulary context (e.g., "Use a dog, a cat, the colors red and blue, and the actions: run, sit, eat"): ');
     if (!prompt) {
       console.error('❌ Error: Prompt cannot be empty');
       process.exit(1);
     }
 
-    // Prompt for sentence count (optional)
-    const sentenceCountInput = await promptUser(`Number of sentences (default: ${SENTENCE_BATCH_SIZE}): `);
+    // Prompt for command/question count (optional)
+    const sentenceCountInput = await promptUser(`Number of commands/questions (default: ${SENTENCE_BATCH_SIZE}): `);
     const sentenceCount = sentenceCountInput ? parseInt(sentenceCountInput, 10) : SENTENCE_BATCH_SIZE;
     
     if (isNaN(sentenceCount) || sentenceCount < 1) {
-      console.error('❌ Error: Invalid sentence count');
+      console.error('❌ Error: Invalid count');
       process.exit(1);
     }
 

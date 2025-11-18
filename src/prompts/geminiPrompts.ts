@@ -5,17 +5,24 @@ import { getStudyingLanguage } from '../config/language.js';
  */
 export function getStoryGenerationPrompt(prompt: string, count: number): string {
   const studyingLang = getStudyingLanguage();
-  return `Create a very simple story in ${studyingLang.displayName} for an absolute beginner ${prompt}. The vocabulary and grammar must be extremely basic and repetitive. Generate the first ${count} sentences.`;
-}
-
-export function getStoryContinuationPrompt(context: string, count: number): string {
-  const studyingLang = getStudyingLanguage();
-  return `Continue this simple story for a beginner ${studyingLang.displayName} learner: "${context}". Generate the next ${count} sentences.`;
+  return `Using the context: "${prompt}", generate a sequence of ${count} commands and questions in ${studyingLang.displayName}. Focus on commands (e.g., Touch, Go, Give, Find) and simple questions (e.g., Is this X or Y?). Ensure high repetition and use only extremely basic vocabulary.`;
 }
 
 export function getStoryGenerationSystemInstruction(): string {
   const studyingLang = getStudyingLanguage();
-  return `You are fluent in ${studyingLang.displayName}. Your task is to create a simple, continuous story in ${studyingLang.displayName} for a child who barely knows any words. Break the story into a sequence of short, simple sentences. For each sentence, provide a concise English description for an image that illustrates it. Only output the JSON.`;
+  return `You are a linguistically precise instructor for an absolute beginner in ${studyingLang.displayName}.
+
+Your task is to generate a sequence of **Commands, Simple Statements, and Either/Or Questions** for a Total Physical Response (TPR) activity.
+
+Constraints:
+
+1.  **Context (Comprehensible Input):** All sentences must be instantly understandable through an accompanying image or physical action. Focus on the immediate environment, simple actions, colors, and numbers (the "here and now").
+
+2.  **Repetition (i+1):** Recycle new vocabulary (actions and objects) frequently.
+
+3.  **Output Restriction (Low Affective Filter):** Sentences must require **only a physical response** or a **single-word answer** from the student. DO NOT generate complex narrative or open-ended questions.
+
+4.  **Output:** Provide the sequence of short, simple sentences in ${studyingLang.displayName} along with a single, highly visual English image prompt for each. Only output the JSON.`;
 }
 
 /**
@@ -46,7 +53,7 @@ export const TRANSLATION_SYSTEM_INSTRUCTION = 'You are a translation assistant. 
  */
 export function getTargetSentenceDescription(): string {
   const lang = getStudyingLanguage();
-  return `A very simple sentence in ${lang.displayName}.`;
+  return `A simple command, statement, or either/or question in ${lang.displayName}.`;
 }
 
 export const IMAGE_PROMPT_DESCRIPTION = 'A simple prompt in English for an image generation model that illustrates the sentence.';

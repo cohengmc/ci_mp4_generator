@@ -61,6 +61,68 @@ export async function saveTranscript(segments: StorySegment[], filepath: string,
 }
 
 /**
+ * Save structured NA script output as markdown table
+ */
+export async function saveStructuredScript(segments: StorySegment[], filepath: string): Promise<void> {
+  try {
+    // Check if segments have NA fields
+    const hasNAFields = segments.length > 0 && segments[0].time !== undefined;
+    
+    if (!hasNAFields) {
+      // If no NA fields, don't save structured output
+      return;
+    }
+    
+    // Build markdown table header
+    const header = '| Time | Transcript Segment (Simplified Speech) | Visual/Action Cues (CI Strategy) | NA Principle Applied |\n';
+    const separator = '| :--- | :--- | :--- | :--- |\n';
+    
+    // Build table rows
+    const rows = segments.map(segment => {
+      const time = segment.time || '';
+      const transcript = segment.transcript || segment.targetSentence || '';
+      const visualCue = segment.visualCue || segment.imagePrompt || '';
+      const naPrinciple = segment.naPrinciple || '';
+      
+      // Escape pipe characters in content
+      const escapePipes = (text: string) => text.replace(/\|/g, '\\|');
+      
+      return `| ${escapePipes(time)} | ${escapePipes(transcript)} | ${escapePipes(visualCue)} | ${escapePipes(naPrinciple)} |`;
+    }).join('\n');
+    
+    const content = header + separator + rows + '\n';
+    
+    await fs.writeFile(filepath, content, 'utf-8');
+  } catch (error) {
+    console.error(`Error saving structured script to ${filepath}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Save storyboard prompts
+ */
+export async function saveStoryboardPrompts(segments: StorySegment[], filepath: string): Promise<void> {
+  try {
+    const hasStoryboard = segments.some(segment => segment.storyboardPrompt);
+    if (!hasStoryboard) {
+      return;
+    }
+
+    const lines = segments.map((segment, index) => {
+      const time = segment.time || `[Frame ${index + 1}]`;
+      const prompt = segment.storyboardPrompt || segment.imagePrompt || '';
+      return `${time}\n${prompt}\n`;
+    }).join('\n');
+
+    await fs.writeFile(filepath, lines.trim(), 'utf-8');
+  } catch (error) {
+    console.error(`Error saving storyboard prompts to ${filepath}:`, error);
+    throw error;
+  }
+}
+
+/**
  * Ensure directory exists, create if it doesn't
  */
 export async function ensureDirectory(dirpath: string): Promise<void> {

@@ -5,12 +5,17 @@ import dotenv from 'dotenv';
 import {
   getStoryGenerationPrompt,
   getStoryGenerationSystemInstruction,
+  getNAScriptEngineeringPrompt,
+  getNAScriptEngineeringSystemInstruction,
+  getStoryboardEnhancementPrompt,
+  STORYBOARD_SYSTEM_INSTRUCTION,
   getImageGenerationPrompt,
   getTranslationPrompt,
   TRANSLATION_SYSTEM_INSTRUCTION,
   getTargetSentenceDescription,
   IMAGE_PROMPT_DESCRIPTION
 } from '../prompts/geminiPrompts.js';
+import type { NAScriptSegment } from '../types.js';
 
 dotenv.config();
 
@@ -42,6 +47,34 @@ function getStorySchema() {
   };
 }
 
+function getNAScriptSchema() {
+  return {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        time: {
+          type: Type.STRING,
+          description: "Timestamp in format [0:00], [0:01], etc.",
+        },
+        transcript: {
+          type: Type.STRING,
+          description: "Simplified speech segment (max 5-7 words, often less)",
+        },
+        visual_cue: {
+          type: Type.STRING,
+          description: "Visual/action cue: Drawing, Mime/Gesture, Prop, or Pointing with description",
+        },
+        na_principle: {
+          type: Type.STRING,
+          description: "NA principle: Maximize CI (Context), Maximize CI (Redundancy), Minimize Affective Filter, or Foreigner Talk/Chunking",
+        },
+      },
+      required: ["time", "transcript", "visual_cue", "na_principle"],
+    },
+  };
+}
+
 export async function generateStorySegments(prompt: string, context?: string, count: number = 5): Promise<{ target_sentence: string; image_prompt: string }[]> {
   const fullPrompt = getStoryGenerationPrompt(prompt, count);
 
@@ -60,6 +93,52 @@ export async function generateStorySegments(prompt: string, context?: string, co
   } catch (error) {
     console.error("Error generating story segments:", error);
     throw new Error("Failed to generate story from prompt.");
+  }
+}
+
+export async function generateNAScriptSegments(storyTopic: string, estimatedDuration: string, targetLevel: string): Promise<NAScriptSegment[]> {
+  const fullPrompt = getNAScriptEngineeringPrompt(storyTopic, estimatedDuration, targetLevel);
+
+  try {
+    const response: GenerateContentResponse = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: fullPrompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: getNAScriptSchema(),
+        systemInstruction: getNAScriptEngineeringSystemInstruction()
+      },
+    });
+    const jsonStr = response.text.trim();
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error("Error generating NA script segments:", error);
+    throw new Error("Failed to generate NA script from prompt.");
+  }
+}
+
+export async function generateStoryboard(segments: NAScriptSegment[]): Promise<string[]> {
+  const simplifiedSegments = segments.map((segment, index) => ({
+    time: segment.time ?? `[Frame ${index + 1}]`,
+    visual_cue: segment.visual_cue ?? 'No visual cue provided',
+  }));
+
+  const storyboardPrompt = getStoryboardEnhancementPrompt(simplifiedSegments);
+
+  try {
+    const response: GenerateContentResponse = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: storyboardPrompt,
+      config: {
+        responseMimeType: 'application/json',
+        systemInstruction: STORYBOARD_SYSTEM_INSTRUCTION,
+      },
+    });
+    const jsonStr = response.text.trim();
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error("Error generating storyboard prompts:", error);
+    throw new Error("Failed to generate storyboard prompts.");
   }
 }
 

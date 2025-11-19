@@ -5,11 +5,12 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
-import { generateStorySegments, generateImage, generateAudioBatch, translateToSpanish } from './services/geminiService.js';
+import { generateStorySegments, generateNAScriptSegments, generateStoryboard, generateImage, generateAudioBatch, translateToSpanish } from './services/geminiService.js';
 import { decode, decodeAudioData, splitAudioBySilence, sliceAudioBuffer, encodeAudioBufferToPCMBase64, adjustAudioSpeed } from './utils/audioUtils.js';
-import { saveImage, saveAudio, saveTranscript, ensureDirectory } from './utils/fileUtils.js';
+import { saveImage, saveAudio, saveTranscript, saveStructuredScript, saveStoryboardPrompts, ensureDirectory } from './utils/fileUtils.js';
 import { createVideos } from './utils/videoUtils.js';
 import { getStudyingLanguage } from './config/language.js';
+import { buildImagePromptFromVisualCue } from './prompts/geminiPrompts.js';
 import type { StorySegment } from './types.js';
 
 // Load environment variables
@@ -96,16 +97,25 @@ function normalizeRangesToCount(
 /**
  * Main content generation function
  */
-async function generateContent(prompt: string, sentenceCount: number, generateSpanish: boolean, audioSpeed: number): Promise<StorySegment[]> {
-  console.log(`\n📝 Generating ${sentenceCount} TPR commands/questions...`);
-  const segmentsData = await generateStorySegments(prompt, undefined, sentenceCount);
-  console.log(`✅ Generated ${segmentsData.length} commands/questions`);
+async function generateContent(storyTopic: string, estimatedDuration: string, targetLevel: string, generateSpanish: boolean, audioSpeed: number): Promise<StorySegment[]> {
+  console.log(`\n📝 Generating NA Script segments for "${storyTopic}" (${estimatedDuration})...`);
+  const segmentsData = await generateNAScriptSegments(storyTopic, estimatedDuration, targetLevel);
+  console.log(`✅ Generated ${segmentsData.length} script segments`);
 
-  // Extract sentences
-  const sentences = segmentsData.map(s => s.target_sentence);
+  console.log(`\n🎨 Refining storyboard for visual consistency...`);
+  let storyboardPrompts: string[] = [];
+  try {
+    storyboardPrompts = await generateStoryboard(segmentsData);
+    console.log(`✅ Storyboard refined with ${storyboardPrompts.length} prompts`);
+  } catch (error) {
+    console.warn(`⚠️  Warning: Failed to refine storyboard, falling back to raw visual cues.`, error);
+  }
+
+  // Extract transcript segments for TTS
+  const transcripts = segmentsData.map(s => s.transcript);
   
   console.log(`\n🎤 Generating audio for target language (${getStudyingLanguage().displayName})...`);
-  let batchedAudioBase64 = await generateAudioBatch(sentences);
+  let batchedAudioBase64 = await generateAudioBatch(transcripts);
   
   // Adjust audio speed if needed
   if (audioSpeed !== 1.0) {
@@ -115,18 +125,18 @@ async function generateContent(prompt: string, sentenceCount: number, generateSp
   console.log(`✅ Generated batch audio for target language`);
 
   // Conditionally generate Spanish content
-  let spanishSentences: string[] = [];
+  let spanishTranscripts: string[] = [];
   let spanishBatchedAudioBase64 = '';
   let spanishAudioClipsBase64: string[] = [];
   let spanishMatchedRanges: { startSample: number; endSample: number }[] = [];
 
   if (generateSpanish) {
     console.log(`\n🌐 Translating to Spanish...`);
-    spanishSentences = await translateToSpanish(sentences);
-    console.log(`✅ Translated ${spanishSentences.length} sentences to Spanish`);
+    spanishTranscripts = await translateToSpanish(transcripts);
+    console.log(`✅ Translated ${spanishTranscripts.length} segments to Spanish`);
 
     console.log(`\n🎤 Generating Spanish audio...`);
-    spanishBatchedAudioBase64 = await generateAudioBatch(spanishSentences, 'Spanish');
+    spanishBatchedAudioBase64 = await generateAudioBatch(spanishTranscripts, 'Spanish');
     
     // Adjust Spanish audio speed if needed
     if (audioSpeed !== 1.0) {
@@ -149,8 +159,8 @@ async function generateContent(prompt: string, sentenceCount: number, generateSp
     hopMs: 10,
   });
 
-  // Normalize ranges to match sentence count
-  const matchedRanges = normalizeRangesToCount(ranges, sentences.length, SAMPLE_RATE);
+  // Normalize ranges to match segment count
+  const matchedRanges = normalizeRangesToCount(ranges, transcripts.length, SAMPLE_RATE);
 
   // Extract individual audio clips
   const audioClipsBase64: string[] = matchedRanges.map(r => {
@@ -170,7 +180,7 @@ async function generateContent(prompt: string, sentenceCount: number, generateSp
       hopMs: 10,
     });
 
-    spanishMatchedRanges = normalizeRangesToCount(spanishRanges, spanishSentences.length, SAMPLE_RATE);
+    spanishMatchedRanges = normalizeRangesToCount(spanishRanges, spanishTranscripts.length, SAMPLE_RATE);
 
     spanishAudioClipsBase64 = spanishMatchedRanges.map(r => {
       const segBuffer = sliceAudioBuffer(spanishAudioBuffer, r.startSample, r.endSample);
@@ -183,22 +193,37 @@ async function generateContent(prompt: string, sentenceCount: number, generateSp
   // Generate images
   console.log(`\n🖼️  Generating images...`);
   const newSegments: StorySegment[] = [];
+  const storyboardNegativeSuffix = ' Negative Prompt: text, words, translation, subtitles, font, letters, handwriting, captions.';
   for (let i = 0; i < segmentsData.length; i++) {
     const segment = segmentsData[i];
     console.log(`  Generating image ${i + 1}/${segmentsData.length}...`);
     
-    // Pass the previous image for consistency (if not the first image)
     const previousImage = i > 0 ? newSegments[i - 1].imageUrl : undefined;
-    const imageUrl = await generateImage(segment.image_prompt, previousImage);
+    
+    const storyboardPrompt = storyboardPrompts[i];
+    let imagePrompt: string;
+    if (storyboardPrompt) {
+      imagePrompt = `${storyboardPrompt}${storyboardNegativeSuffix}`;
+    } else {
+      imagePrompt = buildImagePromptFromVisualCue(segment.visual_cue, !!previousImage);
+    }
+
+    const imageUrl = await generateImage(imagePrompt, previousImage);
     
     newSegments.push({
       id: randomUUID(),
-      targetSentence: segment.target_sentence,
-      imagePrompt: segment.image_prompt,
+      targetSentence: segment.transcript, // Use transcript as targetSentence for compatibility
+      imagePrompt: imagePrompt,
       imageUrl,
       audioBase64: audioClipsBase64[i] ?? '',
-      spanishSentence: generateSpanish ? (spanishSentences[i] ?? undefined) : undefined,
+      spanishSentence: generateSpanish ? (spanishTranscripts[i] ?? undefined) : undefined,
       spanishAudioBase64: generateSpanish ? (spanishAudioClipsBase64[i] ?? undefined) : undefined,
+      // Add NA Script fields
+      time: segment.time,
+      transcript: segment.transcript,
+      visualCue: segment.visual_cue,
+      naPrinciple: segment.na_principle,
+      storyboardPrompt: storyboardPrompt ?? undefined,
     });
   }
   console.log(`✅ Generated ${newSegments.length} images`);
@@ -254,6 +279,15 @@ async function saveFiles(segments: StorySegment[], outputDir: string, generateSp
     await saveTranscript(segments, spanishTranscriptPath, true);
   }
 
+  // Save structured NA script output
+  const structuredScriptPath = join(outputDir, 'na_script_structure.md');
+  console.log(`  Saving na_script_structure.md...`);
+  await saveStructuredScript(segments, structuredScriptPath);
+
+  const storyboardPath = join(outputDir, 'storyboard_prompts.txt');
+  console.log(`  Saving storyboard_prompts.txt...`);
+  await saveStoryboardPrompts(segments, storyboardPath);
+
   console.log(`✅ All files saved successfully!`);
 }
 
@@ -296,24 +330,25 @@ async function main() {
     console.log(`⏸️  Pause Gap Duration: ${pauseGapDuration}s`);
     console.log();
 
-    // Prompt for vocabulary/context
-    const prompt = await promptUser('Enter vocabulary context (e.g., "Use a dog, a cat, the colors red and blue, and the actions: run, sit, eat"): ');
-    if (!prompt) {
-      console.error('❌ Error: Prompt cannot be empty');
+    // Prompt for Story/Topic
+    const storyTopic = await promptUser('Enter Story/Topic: ');
+    if (!storyTopic) {
+      console.error('❌ Error: Story/Topic cannot be empty');
       process.exit(1);
     }
 
-    // Prompt for command/question count (optional)
-    const sentenceCountInput = await promptUser(`Number of commands/questions (default: ${SENTENCE_BATCH_SIZE}): `);
-    const sentenceCount = sentenceCountInput ? parseInt(sentenceCountInput, 10) : SENTENCE_BATCH_SIZE;
-    
-    if (isNaN(sentenceCount) || sentenceCount < 1) {
-      console.error('❌ Error: Invalid count');
+    // Prompt for Estimated Duration
+    const estimatedDuration = await promptUser('Estimated Duration (e.g., 5:00 or 0:30): ');
+    if (!estimatedDuration) {
+      console.error('❌ Error: Estimated Duration cannot be empty');
       process.exit(1);
     }
+
+    // Hard code Target Level
+    const targetLevel = 'A1/Beginner';
 
     // Generate content
-    const segments = await generateContent(prompt, sentenceCount, generateSpanish, audioSpeed);
+    const segments = await generateContent(storyTopic, estimatedDuration, targetLevel, generateSpanish, audioSpeed);
 
     // Create output directory with timestamp (YYYYMMDD_HHMMSS format)
     const now = new Date();

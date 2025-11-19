@@ -7,17 +7,18 @@ export type LanguageKey = 'English' | 'Spanish' | 'Portuguese' | 'French' | 'Man
 export interface LanguageConfig {
   key: LanguageKey;
   displayName: string;
+  englishName: string;
   bcp47: string;
   geminiLocaleTag: string;
   ttsVoiceName: string;
 }
 
 export const LANGUAGE_MAP: Record<LanguageKey, LanguageConfig> = {
-  English: { key: 'English', displayName: 'English', bcp47: 'en-US', geminiLocaleTag: 'en', ttsVoiceName: 'Puck' },
-  Spanish: { key: 'Spanish', displayName: 'Spanish', bcp47: 'es-ES', geminiLocaleTag: 'es', ttsVoiceName: 'Puck' },
-  Portuguese: { key: 'Portuguese', displayName: 'Portuguese', bcp47: 'pt-PT', geminiLocaleTag: 'pt', ttsVoiceName: 'Puck' },
-  French: { key: 'French', displayName: 'French', bcp47: 'fr-FR', geminiLocaleTag: 'fr', ttsVoiceName: 'Puck' },
-  'Mandarin Chinese': { key: 'Mandarin Chinese', displayName: 'Mandarin Chinese', bcp47: 'zh-CN', geminiLocaleTag: 'zh', ttsVoiceName: 'Puck' },
+  English: { key: 'English', displayName: 'English', englishName: 'English', bcp47: 'en-US', geminiLocaleTag: 'en', ttsVoiceName: 'Puck' },
+  Spanish: { key: 'Spanish', displayName: 'Spanish', englishName: 'Spanish', bcp47: 'es-ES', geminiLocaleTag: 'es', ttsVoiceName: 'Puck' },
+  Portuguese: { key: 'Portuguese', displayName: 'Portuguese', englishName: 'Portuguese', bcp47: 'pt-PT', geminiLocaleTag: 'pt', ttsVoiceName: 'Puck' },
+  French: { key: 'French', displayName: 'French', englishName: 'French', bcp47: 'fr-FR', geminiLocaleTag: 'fr', ttsVoiceName: 'Puck' },
+  'Mandarin Chinese': { key: 'Mandarin Chinese', displayName: 'Mandarin Chinese', englishName: 'Mandarin Chinese', bcp47: 'zh-CN', geminiLocaleTag: 'zh', ttsVoiceName: 'Puck' },
 };
 
 function resolveKey(raw?: string | null): LanguageKey {
